@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import { SkeletonHelper } from 'three/addons/helpers/SkeletonHelper.js';
 
 // Scene setup
 const scene = new THREE.Scene();
@@ -16,7 +15,8 @@ camera.position.set(0, 1.6, 3);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
-renderer.outputEncoding = THREE.sRGBEncoding;
+// Fix outdated property references
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1;
 renderer.shadowMap.enabled = true;
@@ -75,7 +75,6 @@ scene.add(grid);
 let mixer;
 let model;
 let skeleton;
-let skeletonHelper;
 let idleAction, walkAction, runAction;
 let activeAction;
 let lastAction;
@@ -86,6 +85,30 @@ const loadingManager = new THREE.LoadingManager();
 loadingManager.onProgress = function(url, loaded, total) {
     console.log(`Loading: ${url} (${Math.round(loaded / total * 100)}%)`);
 };
+
+// Function to transition between animations
+function fadeToAction(newAction, duration) {
+    if (activeAction !== newAction) {
+        lastAction = activeAction;
+        activeAction = newAction;
+        
+        lastAction.fadeOut(duration);
+        activeAction.reset()
+            .setEffectiveTimeScale(1)
+            .setEffectiveWeight(1)
+            .fadeIn(duration)
+            .play();
+    }
+}
+
+// Handle window resize
+window.addEventListener('resize', onWindowResize);
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
 
 function loadModel() {
     const loader = new GLTFLoader(loadingManager);
@@ -179,10 +202,12 @@ function setupEventListeners() {
         
         if (keysPressed['KeyW']) {
             model.position.z -= moveSpeed;
+            model.rotation.y = 0;
             moved = true;
         }
         if (keysPressed['KeyS']) {
             model.position.z += moveSpeed;
+            model.rotation.y = Math.PI;
             moved = true;
         }
         if (keysPressed['KeyA']) {
@@ -212,52 +237,33 @@ function setupEventListeners() {
         }
     }
     
-    // Add to animation loop
-    const originalAnimate = animate;
-    animate = function() {
-        checkMovementKeys();
-        originalAnimate();
-    };
-}
-
-// Function to transition between animations
-function fadeToAction(newAction, duration) {
-    if (activeAction !== newAction) {
-        lastAction = activeAction;
-        activeAction = newAction;
+    // Add movement check to animation loop
+    let animationLoop = function() {
+        requestAnimationFrame(animationLoop);
         
-        lastAction.fadeOut(duration);
-        activeAction.reset()
-            .setEffectiveTimeScale(1)
-            .setEffectiveWeight(1)
-            .fadeIn(duration)
-            .play();
-    }
+        checkMovementKeys();
+        
+        const delta = 0.016; // Approximate value for 60fps
+        
+        // Update animation mixer
+        if (mixer) {
+            mixer.update(delta);
+        }
+        
+        controls.update();
+        renderer.render(scene, camera);
+    };
+    
+    // Start animation loop
+    animationLoop();
 }
 
-// Handle window resize
-window.addEventListener('resize', onWindowResize);
-
-function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-}
-
-// Animation loop
-function animate() {
-    requestAnimationFrame(animate);
-    
-    const delta = 0.016; // Approximate value for 60fps
-    
-    // Update animation mixer
-    if (mixer) {
-        mixer.update(delta);
-    }
-    
+// Animation loop (initial version before model is loaded)
+let animationLoop = function() {
+    requestAnimationFrame(animationLoop);
     controls.update();
     renderer.render(scene, camera);
-}
+};
 
-animate();
-
+// Start initial animation loop
+animationLoop();
