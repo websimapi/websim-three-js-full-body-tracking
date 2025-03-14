@@ -137,9 +137,8 @@ async function setupPoseDetection() {
             };
         });
         
-        // Load TensorFlow.js and MoveNet
-        await tf.ready();
-        console.log("TensorFlow.js loaded:", tf.version);
+        // Load TensorFlow.js and MoveNet - fixed TF loading approach
+        console.log("TensorFlow.js version:", tf.version);
         await tf.setBackend('webgl');
         console.log("Using backend:", tf.getBackend());
         
@@ -149,7 +148,7 @@ async function setupPoseDetection() {
         
         // Initialize the detector with correct properties
         const detectorConfig = {
-            modelType: 'lightning',
+            modelType: poseDetection.movenet.modelType.LIGHTNING,
             enableSmoothing: true
         };
         
