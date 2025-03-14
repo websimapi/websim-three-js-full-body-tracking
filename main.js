@@ -5,6 +5,7 @@ import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import * as poseDetection from '@tensorflow-models/pose-detection';
 import '@tensorflow/tfjs-core';
 import '@tensorflow/tfjs-backend-webgl';
+import * as tf from 'tf';
 
 // Scene setup
 const scene = new THREE.Scene();
@@ -133,7 +134,8 @@ async function setupPoseDetection() {
         
         // Wait for video to be ready
         await new Promise(resolve => {
-            video.onloadedmetadata = () => {
+            video.onloadeddata = () => {
+                video.play();
                 resolve();
             };
         });
@@ -143,6 +145,11 @@ async function setupPoseDetection() {
             modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
             enableSmoothing: true
         };
+        
+        // Make sure TensorFlow backend is initialized
+        await tf.ready();
+        await tf.setBackend('webgl');
+        
         detector = await poseDetection.createDetector(
             poseDetection.SupportedModels.MoveNet, 
             detectorConfig
@@ -158,13 +165,13 @@ async function setupPoseDetection() {
         detectPose();
     } catch (error) {
         console.error('Error setting up pose detection:', error);
-        document.getElementById('loading').innerHTML = 'Error accessing camera. Please check permissions and refresh.';
+        document.getElementById('loading').innerHTML = 'Error accessing camera: ' + error.message;
     }
 }
 
 // Function to continuously detect poses
 async function detectPose() {
-    if (video && detector && isDetectorReady) {
+    if (video && detector && isDetectorReady && video.readyState === 4) {
         try {
             const poses = await detector.estimatePoses(video);
             if (poses && poses.length > 0) {
@@ -210,7 +217,7 @@ function applyPoseToModel() {
         
         // Find bone references if we haven't already
         if (Object.keys(bones).length === 0) {
-            model.traverse(object => {
+            model.traverse(function(object) {
                 if (object.isBone) {
                     bones[object.name] = object;
                 }
