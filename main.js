@@ -5,6 +5,7 @@ import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import * as tf from '@tensorflow/tfjs-core';
 import '@tensorflow/tfjs-backend-webgl';
 import * as posenet from '@tensorflow-models/posenet';
+import { LoadingManager } from 'three';
 
 // Scene setup
 const scene = new THREE.Scene();
@@ -139,19 +140,19 @@ async function setupPoseDetection() {
             };
         });
         
-        // Initialize TensorFlow.js
-        await tf.ready();
-        console.log("TensorFlow.js ready");
-        await tf.setBackend('webgl');
-        console.log("Using backend:", tf.getBackend());
+        // Initialize PoseNet using a more reliable approach
+        console.log("Loading PoseNet model...");
         
-        // Load PoseNet
-        net = await posenet.load({
+        // Load PoseNet with explicit configuration
+        const modelConfig = {
             architecture: 'MobileNetV1',
             outputStride: 16,
             inputResolution: { width: 640, height: 480 },
-            multiplier: 0.75
-        });
+            multiplier: 0.75,
+            quantBytes: 2
+        };
+        
+        net = await posenet.load(modelConfig);
         
         isDetectorReady = true;
         console.log('Pose detector ready');
