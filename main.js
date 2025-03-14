@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import * as poseDetection from '@tensorflow-models/pose-detection';
+import '@tensorflow/tfjs-core';
+import '@tensorflow/tfjs-backend-webgl';
 
 // Scene setup
 const scene = new THREE.Scene();
@@ -79,8 +82,15 @@ let idleAction, walkAction, runAction;
 let activeAction;
 let lastAction;
 const animationActions = [];
+let bones = {};
 
-// Loading manager for tracking progress
+// Pose detection variables
+let detector;
+let video;
+let poseData;
+let isDetectorReady = false;
+
+// Loading manager
 const loadingManager = new THREE.LoadingManager();
 loadingManager.onProgress = function(url, loaded, total) {
     console.log(`Loading: ${url} (${Math.round(loaded / total * 100)}%)`);
@@ -108,6 +118,168 @@ function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// Setup webcam and pose detection
+async function setupPoseDetection() {
+    try {
+        // Access webcam
+        video = document.getElementById('webcam');
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: 640, height: 480 },
+            audio: false
+        });
+        video.srcObject = stream;
+        
+        // Wait for video to be ready
+        await new Promise(resolve => {
+            video.onloadedmetadata = () => {
+                resolve();
+            };
+        });
+        
+        // Initialize the detector
+        const detectorConfig = {
+            modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+            enableSmoothing: true
+        };
+        detector = await poseDetection.createDetector(
+            poseDetection.SupportedModels.MoveNet, 
+            detectorConfig
+        );
+        
+        isDetectorReady = true;
+        console.log('Pose detector ready');
+        
+        // Remove loading message once everything is ready
+        document.getElementById('loading').style.display = 'none';
+        
+        // Start pose detection
+        detectPose();
+    } catch (error) {
+        console.error('Error setting up pose detection:', error);
+        document.getElementById('loading').innerHTML = 'Error accessing camera. Please check permissions and refresh.';
+    }
+}
+
+// Function to continuously detect poses
+async function detectPose() {
+    if (video && detector && isDetectorReady) {
+        try {
+            const poses = await detector.estimatePoses(video);
+            if (poses && poses.length > 0) {
+                poseData = poses[0];
+                applyPoseToModel();
+            }
+        } catch (error) {
+            console.error('Error detecting pose:', error);
+        }
+    }
+    requestAnimationFrame(detectPose);
+}
+
+// Apply detected pose to 3D model
+function applyPoseToModel() {
+    if (!model || !poseData || !poseData.keypoints || !skeleton) return;
+    
+    // Map pose keypoints to bone rotations
+    const keypoints = poseData.keypoints;
+    
+    // Get important keypoints
+    const findKeypoint = name => keypoints.find(kp => kp.name === name);
+    
+    const nose = findKeypoint('nose');
+    const leftShoulder = findKeypoint('left_shoulder');
+    const rightShoulder = findKeypoint('right_shoulder');
+    const leftElbow = findKeypoint('left_elbow');
+    const rightElbow = findKeypoint('right_elbow');
+    const leftWrist = findKeypoint('left_wrist');
+    const rightWrist = findKeypoint('right_wrist');
+    const leftHip = findKeypoint('left_hip');
+    const rightHip = findKeypoint('right_hip');
+    const leftKnee = findKeypoint('left_knee');
+    const rightKnee = findKeypoint('right_knee');
+    const leftAnkle = findKeypoint('left_ankle');
+    const rightAnkle = findKeypoint('right_ankle');
+    
+    // If we have the main keypoints, update the animation to idle
+    if (leftShoulder && rightShoulder && leftHip && rightHip) {
+        if (activeAction !== idleAction) {
+            fadeToAction(idleAction, 0.5);
+        }
+        
+        // Find bone references if we haven't already
+        if (Object.keys(bones).length === 0) {
+            model.traverse(object => {
+                if (object.isBone) {
+                    bones[object.name] = object;
+                }
+            });
+        }
+        
+        // Apply rotations to the model bones based on keypoint positions
+        if (leftShoulder && leftElbow && bones['mixamorigLeftArm']) {
+            const angle = calculateAngle(
+                leftShoulder.x, leftShoulder.y,
+                leftElbow.x, leftElbow.y
+            );
+            bones['mixamorigLeftArm'].rotation.z = -angle + Math.PI/2;
+        }
+        
+        if (rightShoulder && rightElbow && bones['mixamorigRightArm']) {
+            const angle = calculateAngle(
+                rightShoulder.x, rightShoulder.y,
+                rightElbow.x, rightElbow.y
+            );
+            bones['mixamorigRightArm'].rotation.z = angle - Math.PI/2;
+        }
+        
+        if (leftElbow && leftWrist && bones['mixamorigLeftForeArm']) {
+            const angle = calculateAngle(
+                leftElbow.x, leftElbow.y,
+                leftWrist.x, leftWrist.y
+            );
+            bones['mixamorigLeftForeArm'].rotation.z = -angle;
+        }
+        
+        if (rightElbow && rightWrist && bones['mixamorigRightForeArm']) {
+            const angle = calculateAngle(
+                rightElbow.x, rightElbow.y,
+                rightWrist.x, rightWrist.y
+            );
+            bones['mixamorigRightForeArm'].rotation.z = angle;
+        }
+        
+        if (leftHip && leftKnee && bones['mixamorigLeftUpLeg']) {
+            const angle = calculateAngle(
+                leftHip.x, leftHip.y,
+                leftKnee.x, leftKnee.y
+            );
+            bones['mixamorigLeftUpLeg'].rotation.z = -angle + Math.PI/2;
+        }
+        
+        if (rightHip && rightKnee && bones['mixamorigRightUpLeg']) {
+            const angle = calculateAngle(
+                rightHip.x, rightHip.y,
+                rightKnee.x, rightKnee.y
+            );
+            bones['mixamorigRightUpLeg'].rotation.z = angle - Math.PI/2;
+        }
+        
+        if (nose && leftShoulder && rightShoulder && bones['mixamorigSpine2']) {
+            // Calculate body orientation based on shoulders
+            const bodyAngle = calculateAngle(
+                leftShoulder.x, leftShoulder.y,
+                rightShoulder.x, rightShoulder.y
+            );
+            bones['mixamorigSpine2'].rotation.z = -bodyAngle;
+        }
+    }
+}
+
+// Helper function to calculate angle between two points
+function calculateAngle(x1, y1, x2, y2) {
+    return Math.atan2(y2 - y1, x2 - x1);
 }
 
 function loadModel() {
@@ -157,6 +329,9 @@ function loadModel() {
         skeleton = new THREE.SkeletonHelper(model);
         skeleton.visible = true;
         scene.add(skeleton);
+        
+        // Start webcam and pose detection after model is loaded
+        setupPoseDetection();
         
         // Enable user interactions after model is loaded
         setupEventListeners();
