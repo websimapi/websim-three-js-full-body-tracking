@@ -2,9 +2,6 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import * as poseDetection from '@tensorflow-models/pose-detection';
-import '@tensorflow/tfjs-core';
-import '@tensorflow/tfjs-backend-webgl';
 import * as tf from 'tf';
 
 // Scene setup
@@ -140,15 +137,21 @@ async function setupPoseDetection() {
             };
         });
         
-        // Initialize the detector
+        // Load TensorFlow.js and MoveNet
+        await tf.ready();
+        console.log("TensorFlow.js loaded:", tf.version);
+        await tf.setBackend('webgl');
+        console.log("Using backend:", tf.getBackend());
+        
+        // Dynamically import pose detection
+        const poseDetection = await import('https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.js');
+        console.log("Pose detection loaded");
+        
+        // Initialize the detector with correct properties
         const detectorConfig = {
-            modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+            modelType: 'lightning',
             enableSmoothing: true
         };
-        
-        // Make sure TensorFlow backend is initialized
-        await tf.ready();
-        await tf.setBackend('webgl');
         
         detector = await poseDetection.createDetector(
             poseDetection.SupportedModels.MoveNet, 
