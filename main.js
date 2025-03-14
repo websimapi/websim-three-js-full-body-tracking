@@ -142,7 +142,7 @@ async function setupPoseDetection() {
         
         // Initialize the detector
         const detectorConfig = {
-            modelType: poseDetection.movenet.ModelType.SINGLEPOSE_LIGHTNING,
+            modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
             enableSmoothing: true
         };
         
