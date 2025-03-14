@@ -2,10 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-import * as tf from '@tensorflow/tfjs-core';
-import '@tensorflow/tfjs-backend-webgl';
-import * as posenet from '@tensorflow-models/posenet';
-import { LoadingManager } from 'three';
+import { loadingManager } from './loading-manager.js';
 
 // Scene setup
 const scene = new THREE.Scene();
@@ -19,7 +16,6 @@ camera.position.set(0, 1.6, 3);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
-// Fix outdated property references
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1;
@@ -50,7 +46,7 @@ directionalLight.shadow.camera.bottom = -8;
 scene.add(directionalLight);
 
 // Environment map
-new RGBELoader()
+new RGBELoader(loadingManager)
     .load('https://threejs.org/examples/textures/equirectangular/venice_sunset_1k.hdr', function(texture) {
         texture.mapping = THREE.EquirectangularReflectionMapping;
         scene.environment = texture;
@@ -86,16 +82,11 @@ const animationActions = [];
 let bones = {};
 
 // Pose detection variables
-let net;
+let pose;
 let video;
 let poseData;
 let isDetectorReady = false;
-
-// Loading manager
-const loadingManager = new THREE.LoadingManager();
-loadingManager.onProgress = function(url, loaded, total) {
-    console.log(`Loading: ${url} (${Math.round(loaded / total * 100)}%)`);
-};
+let camera_utils;
 
 // Function to transition between animations
 function fadeToAction(newAction, duration) {
@@ -126,33 +117,35 @@ async function setupPoseDetection() {
     try {
         // Access webcam
         video = document.getElementById('webcam');
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: 640, height: 480 },
-            audio: false
-        });
-        video.srcObject = stream;
         
-        // Wait for video to be ready
-        await new Promise(resolve => {
-            video.onloadeddata = () => {
-                video.play();
-                resolve();
-            };
+        // Create MediaPipe Pose instance
+        pose = new Pose({
+            locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`;
+            }
         });
         
-        // Initialize PoseNet using a more reliable approach
-        console.log("Loading PoseNet model...");
+        // Set up pose configuration
+        pose.setOptions({
+            modelComplexity: 1,
+            smoothLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
         
-        // Load PoseNet with explicit configuration
-        const modelConfig = {
-            architecture: 'MobileNetV1',
-            outputStride: 16,
-            inputResolution: { width: 640, height: 480 },
-            multiplier: 0.75,
-            quantBytes: 2
-        };
+        // Set callback for pose results
+        pose.onResults(onPoseResults);
         
-        net = await posenet.load(modelConfig);
+        // Start camera
+        camera_utils = new Camera(video, {
+            onFrame: async () => {
+                await pose.send({image: video});
+            },
+            width: 640,
+            height: 480
+        });
+        
+        camera_utils.start();
         
         isDetectorReady = true;
         console.log('Pose detector ready');
@@ -160,59 +153,29 @@ async function setupPoseDetection() {
         // Remove loading message once everything is ready
         document.getElementById('loading').style.display = 'none';
         
-        // Start pose detection
-        detectPose();
     } catch (error) {
         console.error('Error setting up pose detection:', error);
         document.getElementById('loading').innerHTML = 'Error accessing camera: ' + error.message;
     }
 }
 
-// Function to continuously detect poses
-async function detectPose() {
-    if (video && net && isDetectorReady && video.readyState === 4) {
-        try {
-            const pose = await net.estimateSinglePose(video, {
-                flipHorizontal: true
-            });
-            
-            if (pose && pose.keypoints) {
-                poseData = pose;
-                applyPoseToModel();
-            }
-        } catch (error) {
-            console.error('Error detecting pose:', error);
-        }
+// Handle pose detection results
+function onPoseResults(results) {
+    if (results && results.poseLandmarks) {
+        poseData = results.poseLandmarks;
+        applyPoseToModel();
     }
-    requestAnimationFrame(detectPose);
 }
 
 // Apply detected pose to 3D model
 function applyPoseToModel() {
-    if (!model || !poseData || !poseData.keypoints || !skeleton) return;
+    if (!model || !poseData || !skeleton) return;
     
-    // Map pose keypoints to bone rotations
-    const keypoints = poseData.keypoints;
+    // Convert MediaPipe pose points to the format our model uses
+    const landmarks = poseData;
     
-    // Get important keypoints
-    const findKeypoint = name => keypoints.find(kp => kp.part === name);
-    
-    const nose = findKeypoint('nose');
-    const leftShoulder = findKeypoint('leftShoulder');
-    const rightShoulder = findKeypoint('rightShoulder');
-    const leftElbow = findKeypoint('leftElbow');
-    const rightElbow = findKeypoint('rightElbow');
-    const leftWrist = findKeypoint('leftWrist');
-    const rightWrist = findKeypoint('rightWrist');
-    const leftHip = findKeypoint('leftHip');
-    const rightHip = findKeypoint('rightHip');
-    const leftKnee = findKeypoint('leftKnee');
-    const rightKnee = findKeypoint('rightKnee');
-    const leftAnkle = findKeypoint('leftAnkle');
-    const rightAnkle = findKeypoint('rightAnkle');
-    
-    // If we have the main keypoints, update the animation to idle
-    if (leftShoulder && rightShoulder && leftHip && rightHip) {
+    // If we have enough landmarks, update the animation to idle
+    if (landmarks.length > 20) {
         if (activeAction !== idleAction) {
             fadeToAction(idleAction, 0.5);
         }
@@ -226,51 +189,66 @@ function applyPoseToModel() {
             });
         }
         
+        // Get specific landmarks
+        const leftShoulder = landmarks[11];
+        const rightShoulder = landmarks[12];
+        const leftElbow = landmarks[13];
+        const rightElbow = landmarks[14];
+        const leftWrist = landmarks[15];
+        const rightWrist = landmarks[16];
+        const leftHip = landmarks[23];
+        const rightHip = landmarks[24];
+        const leftKnee = landmarks[25];
+        const rightKnee = landmarks[26];
+        const leftAnkle = landmarks[27];
+        const rightAnkle = landmarks[28];
+        const nose = landmarks[0];
+        
         // Apply rotations to the model bones based on keypoint positions
         if (leftShoulder && leftElbow && bones['mixamorigLeftArm']) {
             const angle = calculateAngle(
-                leftShoulder.position.x, leftShoulder.position.y,
-                leftElbow.position.x, leftElbow.position.y
+                leftShoulder.x, leftShoulder.y,
+                leftElbow.x, leftElbow.y
             );
             bones['mixamorigLeftArm'].rotation.z = -angle + Math.PI/2;
         }
         
         if (rightShoulder && rightElbow && bones['mixamorigRightArm']) {
             const angle = calculateAngle(
-                rightShoulder.position.x, rightShoulder.position.y,
-                rightElbow.position.x, rightElbow.position.y
+                rightShoulder.x, rightShoulder.y,
+                rightElbow.x, rightElbow.y
             );
             bones['mixamorigRightArm'].rotation.z = angle - Math.PI/2;
         }
         
         if (leftElbow && leftWrist && bones['mixamorigLeftForeArm']) {
             const angle = calculateAngle(
-                leftElbow.position.x, leftElbow.position.y,
-                leftWrist.position.x, leftWrist.position.y
+                leftElbow.x, leftElbow.y,
+                leftWrist.x, leftWrist.y
             );
             bones['mixamorigLeftForeArm'].rotation.z = -angle;
         }
         
         if (rightElbow && rightWrist && bones['mixamorigRightForeArm']) {
             const angle = calculateAngle(
-                rightElbow.position.x, rightElbow.position.y,
-                rightWrist.position.x, rightWrist.position.y
+                rightElbow.x, rightElbow.y,
+                rightWrist.x, rightWrist.y
             );
             bones['mixamorigRightForeArm'].rotation.z = angle;
         }
         
         if (leftHip && leftKnee && bones['mixamorigLeftUpLeg']) {
             const angle = calculateAngle(
-                leftHip.position.x, leftHip.position.y,
-                leftKnee.position.x, leftKnee.position.y
+                leftHip.x, leftHip.y,
+                leftKnee.x, leftKnee.y
             );
             bones['mixamorigLeftUpLeg'].rotation.z = -angle + Math.PI/2;
         }
         
         if (rightHip && rightKnee && bones['mixamorigRightUpLeg']) {
             const angle = calculateAngle(
-                rightHip.position.x, rightHip.position.y,
-                rightKnee.position.x, rightKnee.position.y
+                rightHip.x, rightHip.y,
+                rightKnee.x, rightKnee.y
             );
             bones['mixamorigRightUpLeg'].rotation.z = angle - Math.PI/2;
         }
@@ -278,8 +256,8 @@ function applyPoseToModel() {
         if (nose && leftShoulder && rightShoulder && bones['mixamorigSpine2']) {
             // Calculate body orientation based on shoulders
             const bodyAngle = calculateAngle(
-                leftShoulder.position.x, leftShoulder.position.y,
-                rightShoulder.position.x, rightShoulder.position.y
+                leftShoulder.x, leftShoulder.y,
+                rightShoulder.x, rightShoulder.y
             );
             bones['mixamorigSpine2'].rotation.z = -bodyAngle;
         }
@@ -421,8 +399,8 @@ function setupEventListeners() {
         }
     }
     
-    // Add movement check to animation loop
-    let animationLoop = function() {
+    // Start animation loop with movement check
+    animationLoop = function() {
         requestAnimationFrame(animationLoop);
         
         checkMovementKeys();
