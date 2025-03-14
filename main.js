@@ -3,7 +3,6 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { loadingManager } from './loading-manager.js';
-import * as posenet from '@tensorflow-models/posenet';
 
 // Scene setup
 const scene = new THREE.Scene();
@@ -127,7 +126,7 @@ async function setupPoseDetection() {
         
         return new Promise((resolve) => {
             video.onloadeddata = async () => {
-                // Load PoseNet model
+                // Load PoseNet model using global posenet
                 poseNet = await posenet.load({
                     architecture: 'MobileNetV1',
                     outputStride: 16,
